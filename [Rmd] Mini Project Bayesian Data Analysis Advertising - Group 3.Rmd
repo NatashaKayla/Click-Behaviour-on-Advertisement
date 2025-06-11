@@ -1,0 +1,560 @@
+---
+title: "Mini Project Advertising - Group 3"
+output: html_document
+---
+
+# Mini Project Bayesian Data Analysis - Group 3
+
+Group 3:
+
+:   1.  Miecel Alicia Angel J - 2702327601
+
+    2.  Natasha Kayla Cahyadi - 2702235891
+
+    3.  Sherly Vaneza - 2702222163
+
+------------------------------------------------------------------------
+
+## Predictive Modeling for Advertisement Click Behavior
+
+#### Dataset Used: <https://www.kaggle.com/datasets/gabrielsantello/advertisement-click-on-ad>
+
+#### Goals:
+
+The goal of this project is to develop a probabilistic model using Bayesian methods to predict whether a user will click on an advertisement. By analyzing the relationship between user attributes (such as age, daily time spent on site, area income, and daily internet usage) and the likelihood of clicking on ads, the project aims to provide insights into user behavior and improve targeted advertising strategies. The ultimate objective is to quantify uncertainties and interpret the influence of various features on ad-clicking behavior through a Bayesian approach and to predict binary outcomes (Clicked on Ad - 1 (Yes), 0 (No)).
+
+#### Features Description:
+
+1.  **Daily Time Spent on Site**: Time spent on the website (minutes).
+
+2.  **Age**: Consumer's age (years).
+
+3.  **Area Income**: Average income in the consumer's region.
+
+4.  **Daily Internet Usage**: Minutes spent online daily.
+
+5.  **Ad Topic Line**: Advertisement headline.
+
+6.  **City/Country**: Consumer's location.
+
+7.  **Male**: Consumer's gender (1 = Male, 0 = Female).
+
+8.  **Timestamp**: Time of ad interaction.
+
+**Target (Y):** *Clicked on Ad* (1 = Yes, 0 = No).
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(rjags)
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(tidyr)
+library(loo)
+```
+
+### Read Dataset
+
+```{r}
+df <- read.csv('Advertising.csv')
+head(df)
+```
+
+### Exploratory Data Analysis - Data Understanding
+
+```{r}
+str(df)
+```
+
+```{r}
+summary(df)
+```
+
+#### Checking Duplicated Values
+
+```{r}
+sum(duplicated(df))
+```
+
+The dataset has **no duplicate records**.
+
+#### Checking Missing Values
+
+```{r}
+colSums(is.na(df))
+```
+
+The dataset has been thoroughly checked and contains **no missing values**.
+
+#### Renaming Column 'Male' to 'Gender'
+
+```{r}
+# Rename column Male to Gender [0 = Female, 1 = Male]
+df <- df %>% rename(Gender = Male)
+```
+
+The column name **"Male"** has been renamed to **"Gender"** to avoid confusion and ensure clarity in representing gender-related data.
+
+#### Dropping High-Cardinality Categorical Columns
+
+```{r}
+df$Ad.Topic.Line <- NULL
+df$City <- NULL
+df$Timestamp <- NULL
+df$Country <- NULL
+```
+
+Columns with many unique values, like **"Ad Topic Line"**, **"City"**, **"Country"**, and **"Timestamp"**, have been dropped to simplify the dataset.
+
+### Variable Declaration
+
+#### **Intercept (beta[1])**
+
+```{r}
+# Calculate the overall probability of a user clicking on the ad
+p_clicked <- mean(df$Clicked.on.Ad) 
+# Converts the probability p_clicked into a log-odds value
+mu_intercept <- log(p_clicked / (1 - p_clicked))   
+# Compute the variance of the probability p_clicked
+var_intercept <- p_clicked * (1 - p_clicked) 
+# Calculate the precision, which represents how certain the probability estimate is
+tau_intercept <- 1 / var_intercept 
+```
+
+#### **Features (beta[2:(p+1)])**
+
+```{r}
+features <- df[, 1:5]                               
+p <- ncol(features) 
+mu_features <- rep(0, p)                            
+tau_features <- rep(1, p)  
+```
+
+#### **Combine All Priors**
+
+```{r}
+# Prior mean
+mu <- c(mu_intercept, mu_features)   
+# Prior precision
+tau <- c(tau_intercept, tau_features) 
+```
+
+### Standardize Features
+
+```{r}
+features <- scale(features)
+```
+
+Standardize the features dataframe by **centering** (subtracting the mean) and **scaling** (dividing by the standard deviation) each column. This is typically done to ensure that all features contribute equally to any subsequent analysis or modeling.
+
+### Data Preparation for JAGS
+
+```{r}
+N <- nrow(df)  
+X <- as.matrix(features)  
+Y <- df$Clicked.on.Ad  
+
+burn <- 1000
+iters <- 5000
+chains <- 3
+```
+
+------------------------------------------------------------------------
+
+## Fitting 2 Models
+
+#### Model 1 - Logistic Regression
+
+```{r}
+set.seed(123)
+```
+
+```{r}
+model_str <- "
+model {
+  # Likelihood
+  for (i in 1:N) {
+    Y[i] ~ dbern(pi[i])  # Binary outcome with probability pi[i]
+
+    # Logit link function for probability pi[i]
+    logit(pi[i]) <- beta[1] + inprod(X[i, ], beta[2:(p + 1)])
+
+    # Log-likelihood calculation (added small constant for numerical stability)
+    loglike[i] <- Y[i] * log(max(pi[i], 1e-10)) + (1 - Y[i]) * log(max(1 - pi[i], 1e-10))
+  }
+  
+  # Priors for coefficients
+  for (j in 1:(p + 1)) {
+    beta[j] ~ dnorm(mu[j], tau[j])  # Normal prior for each beta with mean mu[j] and precision tau[j]
+  }
+}
+"
+```
+
+```{r}
+data <- list(
+  N = N,
+  p = p,
+  X = X,
+  Y = Y,
+  mu = mu,
+  tau = tau
+)
+```
+
+```{r}
+model <- jags.model(
+  textConnection(model_str),
+  data = data,
+  n.chains = chains
+)
+```
+
+```{r}
+update(
+  model,
+  burn
+)
+
+samples <- coda.samples(
+  model,
+  variable.names = c("beta"),
+  n.iter = iters,
+  n.thin = 5
+)
+```
+
+```{r}
+summary(samples)
+```
+
+```{r}
+plot(samples)
+```
+
+#### **Interpretation Model 1 - Logistic Regression:**
+
+| Variable | Coefficient (Mean) | Interpretation |
+|-----------------|-----------------|--------------------------------------|
+| **beta[1] (Intercept)** | 1.2281 | Baseline log-odds when all predictors are zero. |
+| **beta[2] (Age)** | -2.5486 | **Negative:** Older individuals are less likely to click on ads. |
+| **beta[3] (Area Income)** | 1.2208 | **Positive:** Higher area income increases the likelihood of clicking ads. |
+| **beta[4] (Daily Internet Usage)** | -1.4738 | **Negative:** More internet usage reduces the likelihood of clicking ads. |
+| **beta[5] (Gender)** | -2.4188 | **Negative:** Males are significantly less likely to click on ads compared to females |
+| **beta[6] (Daily Time on Site)** | -0.1887 | **Negative:** More time on the site slightly reduces the likelihood of clicking ads. |
+
+#### Model 2 - Probit Regression
+
+```{r}
+modelstr2 <- textConnection("model {
+  # Likelihood
+  for (i in 1:N) {
+    Y[i] ~ dbern(pi[i])  # Binary outcome with probability pi[i]
+    
+    # Linear predictor and logit link
+    pi[i] <- phi(beta[1] + inprod(X[i, ], beta[2:(p + 1)]))  # Probit link (phi: CDF of standard normal)
+    
+    # Log-likelihood calculation for posterior analysis
+    loglike[i] <- Y[i] * log(max(pi[i], 1e-10)) + (1 - Y[i]) * log(max(1 - pi[i], 1e-10))
+  }
+  
+  # Priors for coefficients
+  for (j in 1:(p + 1)) {
+    beta[j] ~ dnorm(0, 0.01)  # Normal prior with mean 0 and precision 0.01 (variance = 100)
+  }
+}")
+```
+
+```{r}
+model2 <- jags.model(
+  modelstr2,
+  data = data,
+  n.chains = chains
+)
+```
+
+```{r}
+update(model2,
+       burn)
+
+samples2 <- coda.samples(
+  model2,
+  variable.names = c("beta"),
+  n.iter = iters,
+  n.thin = 5
+)
+```
+
+```{r}
+summary(samples2)
+```
+
+```{r}
+plot(samples2)
+```
+
+#### **Interpretation Model 2 - Probit Regression:**
+
+| Variable | Coefficient (Mean) | Interpretation |
+|-----------------|-----------------|---------------------------------------|
+| **beta[1] (Intercept)** | 1.01772 | Baseline log-odds of **clicking on ads** when all predictors (Age, Area Income, etc.) are zero. |
+| **beta[2] (Age)** | -1.63711 | **Negative**: Older individuals are less likely to click on ads compared to younger individuals. |
+| **beta[3] (Area Income)** | 0.79094 | **Positive**: Individuals from higher income areas are more likely to click on ads. |
+| **beta[4] (Daily Internet Usage)** | -0.98894 | **Negative**: Increased daily internet usage reduces the likelihood of clicking on ads. |
+| **beta[5] (Gender)** | -1.45324 | **Negative**: Males are significantly less likely to click on ads compared to females. |
+| **beta[6] (Daily Time on Site)** | -0.08582 | **Negative**: Spending more time on the site slightly reduces the likelihood of clicking on ads. |
+
+------------------------------------------------------------------------
+
+## Convergence Diagnostics
+
+#### Model 1 - Logistic Regression
+
+```{r}
+# Low ESS indicates poor convergence
+cat("ESS :\n")
+effectiveSize(samples) 
+```
+
+-   ESS \< 100 : **Poor Convergence**
+
+-   100 \<= ESS \< 1000 : **Moderate Convergence**
+
+-   ESS \>= 1000 : **Good Convergence**
+
+|   | beta[1] | beta[2] | beta[3] | beta[4] | beta[5] | beta[6] |
+|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
+| **Convergence** | Convergence | Convergence | Convergence | Convergence | Convergence | Convergence |
+
+Even though ESS in **beta[1]** is the lowest compare with another beta, beta[1] still have good convergence because **ESS score \>= 1000**.
+
+```{r}
+# Autocorrelation near 1 indicates poor convergence
+cat("Autocorrelation :\n")
+autocorr(samples[[1]],lag=1) 
+```
+
+-   **Poor Convergence:** AMC \> 0.4
+
+-   **Moderate Convergence:** 0.2 ≤ AMC ≤ 0.4
+
+-   **Good Convergence:** AMC \< 0.2
+
+| **Parameter** | Absolute Mean Autocorrelation | Convergence Category |
+|-----------------------------|-------------------------|-------------------|
+| **beta[1] (Intercept)** | 0.3681 | Moderate |
+| **beta[2] (Age)** | 0.2592 | Moderate |
+| **beta[3] (Area Income)** | 0.2328 | Moderate |
+| **beta[4] (Daily Internet Usage)** | 0.2502 | Moderate |
+| **beta[5] (Gender)** | 0.1887 | High |
+| **beta[6] (Daily Time on Site)** | 0.0498 | High |
+
+```{r}
+# R greater than 1.1 indicates poor convergence
+cat("Gelman Diag :\n")
+gelman.diag(samples)
+```
+
+|   | beta[1] | beta[2] | beta[3] | beta[4] | beta[5] | beta[6] |
+|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
+| **Convergence** | Convergence | Convergence | Convergence | Convergence | Convergence | Convergence |
+
+```{r}
+cat("Geweke Diag :\n")
+geweke.diag(samples[[1]]) # |z| greater than 2 indicates poor convergence
+```
+
+|   | beta[1] | beta[2] | beta[3] | beta[4] | beta[5] | beta[6] |
+|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
+| **Convergence** | Convergence | Convergence | Convergence | Convergence | Convergence | Convergence |
+
+**Conclusion**
+
+The logistic regression model has **converged successfully** for all parameters, including the intercept, as indicated by the ESS, autocorrelation, Gelman and Geweke Diagnostic results. The model identifies key factors influencing the likelihood of clicking ads: higher area income positively impacts the probability, while older age, being male, increased daily internet usage, and more time spent on the site reduce the likelihood of clicking ads. With stable and reliable parameter estimates, the model provides valuable insights for targeting specific audiences, such as individuals with higher income or females, to optimize advertising strategies effectively.
+
+#### Model 2 - Probit Regression [Uninformative]
+
+```{r}
+cat("ESS 2:\n")
+effectiveSize(samples2) #low ESS indicates poor convergence
+```
+
+-   ESS \< 100 : **Poor Convergence**
+
+-   100 \<= ESS \< 1000 : **Moderate Convergence**
+
+-   ESS \>= 1000 : **Good Convergence**
+
+|   | beta[1] | beta[2] | beta[3] | beta[4] | beta[5] | beta[6] |
+|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
+| **Convergence** | Convergence | Convergence | Convergence | Convergence | Convergence | Convergence |
+
+```{r}
+cat("Autocorrelation 2:\n")
+autocorr(samples2[[1]],lag=1) #autocorrelation near 1 indicates poor convergence
+```
+
+-   **Poor Convergence:** AMC \> 0.4
+
+-   **Moderate Convergence:** 0.2 ≤ AMC ≤ 0.4
+
+-   **Good Convergence:** AMC \< 0.2
+
+| **Parameter** | Absolute Mean Autocorrelation | Convergence Category |
+|-----------------------------|-------------------------|-------------------|
+| **beta[1] (Intercept)** | 0.417 | Poor |
+| **beta[2] (Age)** | 0.360 | Moderate |
+| **beta[3] (Area Income)** | 0.315 | Moderate |
+| **beta[4] (Daily Internet Usage)** | 0.375 | Moderate |
+| **beta[5] (Gender)** | 0.317 | Moderate |
+| **beta[6] (Daily Time on Site)** | 0.055 | High |
+
+```{r}
+cat("Gelman Diag 2:\n")
+gelman.diag(samples2) #R greater than 1.1 indicates poor convergence
+```
+
+|   | beta[1] | beta[2] | beta[3] | beta[4] | beta[5] | beta[6] |
+|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
+| **Convergence** | Convergence | Convergence | Convergence | Convergence | Convergence | Convergence |
+
+```{r}
+cat("Geweke Diag 2:\n")
+geweke.diag(samples2[[1]]) #|z| greater than 2 indicates poor convergence
+```
+
+|   | beta[1] | beta[2] | beta[3] | beta[4] | beta[5] | beta[6] |
+|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
+| **Convergence** | Convergence | Convergence | Convergence | Convergence | Convergence | Convergence |
+
+**Conclusion**
+
+The probit regression model shows **satisfactory performance** based on Gelman and Geweke diagnostics, ESS, and autocorrelation results. All parameters exhibit **good or moderate convergence**, with sufficient effective sample sizes (ESS) and acceptable autocorrelation levels, ensuring reliable parameter estimates. While beta[1] (intercept) has slightly higher autocorrelation and lower ESS, indicating slower mixing, other parameters, such as beta[6] (daily time on site), demonstrate efficient sampling. Overall, the model is robust and provides reliable insights into the factors influencing ad-click behavior, making it suitable for practical applications in targeted advertising.
+
+------------------------------------------------------------------------
+
+## Compare 2 Models
+
+#### Using DIC
+
+```{r}
+dic_1 <- dic.samples(model, n.iter = iters)
+dic_2 <- dic.samples(model2, n.iter = iters)
+```
+
+```{r}
+# Compare DIC
+cat("DIC Model 1:\n")
+dic_1
+
+cat("\nDIC Model 2:\n")
+dic_2
+```
+
+Lower DIC values indicate a better trade-off between model fit and complexity. For Model 1, the mean deviance is 192.4, reflecting its fit to the data, with a penalty for complexity of 5.529. This results in a penalized deviance (DIC) of 197.9. On the other hand, Model 2 has a mean deviance of 191.5, indicating a slightly better fit to the data. However, it has a higher complexity penalty of 6.041, leading to a DIC of 197.6.
+
+When comparing the two models, **Model 2 demonstrates a better overall performance with a lower DIC value (197.6) compared to Model 1 (197.9). While Model 2 is slightly more complex, its better fit to the data justifies the additional complexity. Therefore, for the advertising dataset, Model 2 is the preferred choice as it offers a more optimal balance between data fit and model complexity.**
+
+#### Using WAIC
+
+```{r}
+samples_matrix <- as.matrix(samples)
+dim(samples_matrix)
+```
+
+```{r}
+waic_1 <- waic(samples_matrix)
+waic_1
+```
+
+```{r}
+samples2_matrix <- as.matrix(samples2)
+dim(samples2_matrix)
+```
+
+```{r}
+waic_2 <- waic(samples2_matrix)
+waic_2
+```
+
+The second model has a lower WAIC (4.8) compared to the first model (8.6), indicating better predictive performance. Although both models have relatively high standard errors (8.4 for the first and 5.6 for the second), the notable difference in WAIC suggests that **the second model is more likely to generalize well to new data.**
+
+------------------------------------------------------------------------
+
+## Choosing Best Models
+
+Lower DIC and WAIC values indicate a better trade-off between model fit, complexity, and predictive performance. For Model 1, the mean deviance is 192.4, with a complexity penalty of 5.529, resulting in a DIC of 197.9. Model 2, in comparison, has a mean deviance of 191.5 and a slightly higher complexity penalty of 6.041, leading to a lower DIC of 197.6, indicating a better overall performance.
+
+Additionally, Model 2 has a lower WAIC value (4.8) compared to Model 1 (8.6), which highlights its superior predictive performance. While both models have relatively high standard errors (8.4 for Model 1 and 5.6 for Model 2), the significant difference in WAIC suggests that Model 2 is more likely to generalize well to new data.
+
+**Based on the combined evaluation using DIC and WAIC, Model 2 is the preferred choice for the advertising dataset as it strikes a better balance between data fit, complexity, and predictive performance.**
+
+------------------------------------------------------------------------
+
+## Posterior Predictive Checks
+
+```{r}
+
+print(sum(Y)) # sum dari Y (berapa banyak jumlah data yang hasilnya '1')
+print(length(Y)) # jumlah data Y
+```
+
+```{r}
+# observed mean Y
+sum(Y) / length(Y)
+```
+
+```{r}
+D0 <- c(min(Y), max(Y), mean(Y))
+Dnames <- c("Min Y","Max Y","Mean Y")
+
+#Find D
+Y_rep <- matrix(rnorm(iters * length(Y), mean = mean(Y), sd = sd(Y)), ncol = length(Y))
+
+D <- apply(Y_rep, 1, function(y) c(min(y), max(y), mean(y)))
+D <- t(D)
+
+#compute the test stats for the model
+pval <- rep(0,length(D0))
+names(pval) <- Dnames
+
+for(j in 1:length(D0)){
+  plot(density(D[,j]),xlim=range(c(D0[j],D[,j])), xlab="D",ylab="Posterior probability",main=Dnames[j])
+  abline(v=D0[j],col=2)
+  legend("topleft",c("Model","Data"),lty=1,col=1:2,bty="n")
+  
+  pval[j] <- mean(D[,j]>D0[j])
+}
+print(pval)
+```
+
+```{r}
+D0 <- c(min(Y), max(Y), mean(Y))
+Dnames <- c("Min Y","Max Y","Mean Y")
+
+#Find D
+Y_rep <- matrix(rnorm(iters * length(Y), mean = mean(Y), sd = sd(Y)), ncol = length(Y))
+
+D <- apply(Y_rep, 1, function(y) c(min(y), max(y), mean(y)))
+D <- t(D)
+
+#compute the test stats for the model
+pval <- rep(0,length(D0))
+names(pval) <- Dnames
+
+for(j in 1:length(D0)){
+  plot(density(D[,j]),xlim=range(c(D0[j],D[,j])), xlab="D",ylab="Posterior probability",main=Dnames[j])
+  abline(v=D0[j],col=2)
+  legend("topleft",c("Model","Data"),lty=1,col=1:2,bty="n")
+  
+  pval[j] <- mean(D[,j]>D0[j])
+}
+print(pval)
+```
+
+#### **Interpretation and Conclusion:** 
+
+Both models closely match the observed mean, indicating that they fit the data well. However, Model 2 is slightly closer to the observed mean, suggesting a marginally better alignment with the observed data. Although the difference is minimal, **Model 2 demonstrates a more accurate fit and is therefore the preferred choice for the advertisement dataset.**
